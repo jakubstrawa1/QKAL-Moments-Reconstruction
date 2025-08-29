@@ -65,17 +65,25 @@ def train_qkal_from_arrays(
     def run_epoch(dl, train: bool) -> float:
         model.train(train)
         tot, n = 0.0, 0
-        for xb, ub in dl:
-            xb, ub = xb.to(dev), ub.to(dev)
-            preds = model(xb)
-            loss = criterion(preds, ub)
-            if train:
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-                opt.step()
-            bs = xb.size(0)
-            tot += loss.item() * bs
-            n += bs
+        with torch.set_grad_enabled(train):
+            for xb, ub in dl:
+                xb = xb.to(dev)
+                ub = ub.to(dev).float()
+
+                preds = model(xb)  # (B, K) np.
+                out = criterion(preds, ub)
+                loss = out[0] if isinstance(out, tuple) else out
+                if loss.dim() != 0:
+                    loss = loss.mean()
+
+                if train:
+                    opt.zero_grad(set_to_none=True)
+                    loss.backward()
+                    opt.step()
+
+                bs = xb.size(0)
+                tot += loss.item() * bs
+                n += bs
         return tot / max(n, 1)
 
     best_val, best_state = float("inf"), None

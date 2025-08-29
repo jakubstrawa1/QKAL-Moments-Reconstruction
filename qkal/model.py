@@ -1,7 +1,7 @@
 import torch, torch.nn as nn, torch.nn.functional as F, math
-from qkal.layer import QKAL_Layer
-from qkal.legendre import compute_scaled_legendre_polynomials
-from config import QKALReconstructionConfig, CalibrationMode
+from .layer import QKAL_Layer
+from .legendre import compute_scaled_legendre_polynomials
+from .config import QKALReconstructionConfig, CalibrationMode
 
 class QKAL(nn.Module):
     """
