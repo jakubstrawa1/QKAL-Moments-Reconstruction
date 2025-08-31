@@ -4,11 +4,11 @@ import torch
 
 from utils.config import QKALReconstructionConfig
 from qkal.train import train_qkal_from_arrays
-from qkal.eval import eval_nll, predict_mean_from_density, rmse, mae
+from eval.eval import eval_nll, predict_mean_from_density, rmse, mae
 
 
 try:
-    from qkal.eval import pit_and_coverage
+    from eval.eval import pit_and_coverage
     HAS_PIT = True
 except Exception:
     HAS_PIT = False
