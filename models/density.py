@@ -1,8 +1,10 @@
-import torch
 from torch import Tensor
 import math
 import numpy as np
-from qkal.config import QKALReconstructionConfig
+from utils.config import ReconstructionConfig, CalibrationMode
+from utils.legendre import compute_scaled_legendre_polynomials
+import torch, torch.nn.functional as F
+
 
 def _model_device_dtype(model):
     p = next(model.parameters(), None)
@@ -45,23 +47,36 @@ def kde_pdf(y_query: Tensor, y_data: Tensor, bandwidth: float = None) -> Tensor:
     return kern.mean(dim=1).view(-1)
 
 @torch.no_grad()
-def density_from_qkal(
+def density_from_model(
     model,
     x_batch,
     y_data,
-    config: QKALReconstructionConfig
+    config: ReconstructionConfig
 ):
     device, dtype = _model_device_dtype(model)
     x_batch = _to_torch(x_batch, device, dtype)
     y_data  = _to_torch(y_data,  device, dtype)
 
-    rho_u_batch, u_grid = model.predict_density_u(x_batch, nn_grid=config.grid_size, mode=config.calibration_mode)
+    rho_u_batch, u_grid = predict_density_u(
+        model,
+        x_batch,
+        nn_grid=config.grid_size,
+        mode=config.calibration_mode,
+        degree=config.degree)
+
     u_grid = u_grid.to(device=device, dtype=dtype)
     rho_u_batch = rho_u_batch.to(device=device, dtype=dtype)
 
     y_min, y_max = y_data.min(), y_data.max()
     pad = 0.05 * (y_max - y_min + 1e-12)
-    y_grid = torch.linspace(y_min - pad, y_max + pad, config.grid_size, device=device, dtype=dtype)
+
+    y_grid = torch.linspace(
+        y_min - pad,
+        y_max + pad,
+        config.grid_size,
+        device=device,
+        dtype=dtype)
+
     cdf_vals = empirical_cdf(y_data, y_grid)
     y_of_u = inverse_cdf(u_grid, y_grid, cdf_vals)
     p_marg_y = kde_pdf(y_of_u, y_data, bandwidth=config.kde_bandwidth)
@@ -78,3 +93,35 @@ def density_from_qkal(
         f_y_batch = f_y_tilde
 
     return y_of_u, f_y_batch, u_grid, rho_u_batch, dy_du, p_marg_y
+
+
+@torch.no_grad()
+def predict_density_u(model, x: torch.Tensor, nn_grid: int, mode: CalibrationMode, degree):
+    """
+    Reconstruct rho(u|x) on u_k grid (u_k) = (k-0.5) / nn_grid
+    in CDF space. (U SPACE)
+    """
+    m = model.forward(x)                   # (B, K)
+    device = m.device
+    u_grid = torch.arange(1, nn_grid+1, device=device, dtype=m.dtype)
+    u_grid = (u_grid - 0.5) / nn_grid
+
+    a = torch.tensor(1.0, device=device)
+    b = torch.tensor(1e-3, device=device)
+    c = torch.tensor(1.0, device=device)
+
+
+    P = compute_scaled_legendre_polynomials(u_grid[None, :], degree)  # (1, nn, K)
+    P = P.squeeze(0)
+
+    rho_raw = torch.matmul(m, P.t())
+
+    if mode == CalibrationMode.CLAMP:
+        rho_pos = torch.clamp(rho_raw, min=0.1)
+    elif mode == CalibrationMode.CALIBRATED_SOFTPLUS:
+        rho_pos = a * torch.log(b + torch.exp(c * rho_raw))
+    else:
+        rho_pos = F.softplus(rho_raw)
+
+    rho_u = rho_pos / (rho_pos.mean(dim=1, keepdim=True) + 1e-12)  # (B, nn)
+    return rho_u, u_grid

@@ -3,7 +3,7 @@ import torch
 import pytest
 
 from qkal.density import density_from_qkal, empirical_cdf, inverse_cdf
-from qkal.config import QKALReconstructionConfig, CalibrationMode
+from utils.config import QKALReconstructionConfig, CalibrationMode
 import torch.nn as nn
 
 

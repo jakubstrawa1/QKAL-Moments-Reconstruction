@@ -9,17 +9,18 @@ class CalibrationMode(Enum):
     CLAMP = "clamp"
 
 @dataclass
-class QKALReconstructionConfig:
-    degree: int = 6
-    input_dim: int = 28 * 28
-    hidden_dim: int = 256
+class ReconstructionConfig:
+    degree: int = 0          # or ignore and set output=1
+    input_dim: int = 13
+    hidden_dim: int = 128    # only if you add an MLP
+    batch_size: int = 32
+
 
     elementwise_affine: bool = True
     calibration_mode: CalibrationMode = CalibrationMode.CALIBRATED_SOFTPLUS
     grid_size = 512
 
     seed=42
-    batch_size = 10
     reduction: Literal["mean", "sum", "none"] = "none"
     learning_rate: float = 3e-3
     weight_decay: float = 1e-3

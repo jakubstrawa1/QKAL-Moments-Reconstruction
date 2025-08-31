@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.linear_model import LinearRegression
-from .density import density_from_qkal
+from models.density import density_from_model
 
 def rmse(a, b): return float(np.sqrt(np.mean((a - b) ** 2)))
 def mae(a, b):  return float(np.mean(np.abs(a - b)))
@@ -24,7 +24,7 @@ def eval_nll(model, X: np.ndarray, y: np.ndarray, config, batch_size: int = 2048
         xb = xb.to(device)
         y_np = yb.numpy()
 
-        y_of_u, f_y_batch, _, _, _, _ = density_from_qkal(model, xb, yb, config)
+        y_of_u, f_y_batch, _, _, _, _ = density_from_model(model, xb, yb, config)
         y_grid = y_of_u.detach().cpu().numpy()     # (B, nn) lub (nn,)
         fy     = f_y_batch.detach().cpu().numpy()  # (B, nn) lub (nn,)
 
@@ -66,7 +66,7 @@ def predict_mean_from_density(model, X: np.ndarray, y_like: np.ndarray, config,
     )
     outs = []
     for xb, yb in dl:
-        y_of_u, f_y_batch, *_ = density_from_qkal(model, xb.to(device), yb.to(device), config)
+        y_of_u, f_y_batch, *_ = density_from_model(model, xb.to(device), yb.to(device), config)
         y_grid = y_of_u.detach().cpu().numpy()    # (B, nn)
         fy     = f_y_batch.detach().cpu().numpy() # (B, nn)
         area = np.trapz(fy, x=y_grid, axis=1)
@@ -104,7 +104,7 @@ def pit_and_coverage(model, X: np.ndarray, y: np.ndarray, config,
 
     for xb, yb in dl:
         xb = xb.to(device); yb = yb.to(device)
-        y_of_u, f_y_batch, u_grid, *_ = density_from_qkal(model, xb, yb, config)
+        y_of_u, f_y_batch, u_grid, *_ = density_from_model(model, xb, yb, config)
         yg = y_of_u.detach().cpu().numpy()
         fy = f_y_batch.detach().cpu().numpy()
 
