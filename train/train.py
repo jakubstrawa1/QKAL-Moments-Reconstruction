@@ -1,8 +1,9 @@
+from models.density import density_from_model
 from models.linear_model import LinearMomentsTorch
 from models.small_deep_moments_mlp import SmallDeepMomentsMLP
-from qkal.model import QKAL
+from models.qkal import QKAL
 from utils.plot import plot_y_space, plot_u_space
-from qkal.eval import eval_nll, predict_mean_from_density, rmse, mae, baseline_lr_metrics
+from eval.eval import eval_nll, predict_mean_from_density, rmse, mae, baseline_lr_metrics
 
 
 from typing import Tuple
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     config.hidden_dim = 64
     config.batch_size = 4096
     config.grid_size = 512
-
+    #todo to trzeba fixnac
     X, y = load_your_data(log_price=False)
 
     if getattr(config, "input_dim", None) != X.shape[1]:
@@ -135,7 +136,7 @@ if __name__ == "__main__":
     base = baseline_lr_metrics(X, y, X, y)
     print(f"\n[Baseline LR] NLL(all): {base['nll']:.4f} | RMSE(all): {base['rmse']:.0f} | MAE(all): {base['mae']:.0f}")
 
-    y_of_u, f_y_batch, u_grid, rho_u_batch, dy_du, p_marg_y = density_from_qkal(
+    y_of_u, f_y_batch, u_grid, rho_u_batch, dy_du, p_marg_y = density_from_model(
         model, X, y, config
     )
     plot_u_space(

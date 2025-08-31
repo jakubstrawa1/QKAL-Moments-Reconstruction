@@ -1,5 +1,5 @@
 import torch, torch.nn as nn
-from .layer import QKAL_Layer
+from qkal.layer import QKAL_Layer
 from utils.config import ReconstructionConfig
 
 
