@@ -2,7 +2,7 @@ import math
 import torch
 import pytest
 
-from qkal.legendre import compute_scaled_legendre_polynomials, legendre_targets_from_y
+from utils.legendre import compute_scaled_legendre_polynomials, legendre_targets_from_y
 
 
 def test_shapes_general():

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from qkal.config import QKALReconstructionConfig
+from utils.config import QKALReconstructionConfig
 from qkal.train import train_qkal_from_arrays
 from qkal.eval import eval_nll, predict_mean_from_density, rmse, mae
 

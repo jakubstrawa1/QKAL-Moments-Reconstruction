@@ -1,7 +1,7 @@
-import torch, torch.nn as nn, torch.nn.functional as F, math
+import torch, torch.nn as nn
 from .layer import QKAL_Layer
-from .legendre import compute_scaled_legendre_polynomials
-from .config import QKALReconstructionConfig, CalibrationMode
+from utils.config import ReconstructionConfig
+
 
 class QKAL(nn.Module):
     """
@@ -12,7 +12,7 @@ class QKAL(nn.Module):
     """
     def __init__(
         self,
-        config: QKALReconstructionConfig
+        config: ReconstructionConfig,
     ):
         super().__init__()
         self.config = config
@@ -46,30 +46,3 @@ class QKAL(nn.Module):
         x = self.l2(x); x = self.ln2(x)
         m = self.l3(x)  # (B, K)
         return m
-
-    @torch.no_grad()
-    def predict_density_u(self, x: torch.Tensor, nn_grid: int, mode: CalibrationMode):
-        """
-        Reconstruct rho(u|x) on u_k grid (u_k) = (k-0.5) / nn_grid
-        in CDF space. (U SPACE)
-        """
-        m = self.forward(x)                   # (B, K)
-        B = m.size(0)
-        device = m.device
-        u_grid = torch.arange(1, nn_grid+1, device=device, dtype=m.dtype)
-        u_grid = (u_grid - 0.5) / nn_grid
-
-        P = compute_scaled_legendre_polynomials(u_grid[None, :], self.degree)  # (1, nn, K)
-        P = P.squeeze(0)                               # (nn, K)
-
-        rho_raw = torch.matmul(m, P.t())               # (B, nn)
-
-        if mode == CalibrationMode.CLAMP:
-            rho_pos = torch.clamp(rho_raw, min=0.1)
-        elif mode == CalibrationMode.CALIBRATED_SOFTPLUS:
-            rho_pos = self.cal_a * torch.log(self.cal_b + torch.exp(self.cal_c * rho_raw))
-        else:
-            rho_pos = F.softplus(rho_raw)
-
-        rho_u = rho_pos / (rho_pos.mean(dim=1, keepdim=True) + 1e-12)  # (B, nn)
-        return rho_u, u_grid
