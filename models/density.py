@@ -96,32 +96,40 @@ def density_from_model(
 
 
 @torch.no_grad()
-def predict_density_u(model, x: torch.Tensor, nn_grid: int, mode: CalibrationMode, degree):
+def predict_density_u(model, x: torch.Tensor, nn_grid: int, mode: CalibrationMode, degree: int):
     """
-    Reconstruct rho(u|x) on u_k grid (u_k) = (k-0.5) / nn_grid
-    in CDF space. (U SPACE)
+    Reconstruct rho(u|x) on u_k grid (u_k) = (k-0.5)/nn_grid in CDF space.
     """
-    m = model.forward(x)                   # (B, K)
-    device = m.device
-    u_grid = torch.arange(1, nn_grid+1, device=device, dtype=m.dtype)
+    m = model.forward(x)
+    device, dtype = m.device, m.dtype
+
+    u_grid = torch.arange(1, nn_grid + 1, device=device, dtype=dtype)
     u_grid = (u_grid - 0.5) / nn_grid
 
-    a = torch.tensor(1.0, device=device)
-    b = torch.tensor(1e-3, device=device)
-    c = torch.tensor(1.0, device=device)
-
-
-    P = compute_scaled_legendre_polynomials(u_grid[None, :], degree)  # (1, nn, K)
-    P = P.squeeze(0)
+    P = compute_scaled_legendre_polynomials(u_grid[None, :], degree).squeeze(0)
 
     rho_raw = torch.matmul(m, P.t())
+    rho_raw = rho_raw.clamp(min=-30.0, max=30.0)
+
+    a = getattr(model, "cal_a", None)
+    b = getattr(model, "cal_b", None)
+    c = getattr(model, "cal_c", None)
+    a = a.to(dtype) if isinstance(a, torch.Tensor) else torch.tensor(1.0, device=device, dtype=dtype)
+    b = b.to(dtype) if isinstance(b, torch.Tensor) else torch.tensor(1e-3, device=device, dtype=dtype)
+    c = c.to(dtype) if isinstance(c, torch.Tensor) else torch.tensor(1.0, device=device, dtype=dtype)
 
     if mode == CalibrationMode.CLAMP:
-        rho_pos = torch.clamp(rho_raw, min=0.1)
+        rho_pos = torch.clamp(rho_raw, min=1e-3)
     elif mode == CalibrationMode.CALIBRATED_SOFTPLUS:
-        rho_pos = a * torch.log(b + torch.exp(c * rho_raw))
+
+        rho_pos = a * torch.logaddexp(torch.log(b + 1e-12), c * rho_raw)
     else:
         rho_pos = F.softplus(rho_raw)
 
-    rho_u = rho_pos / (rho_pos.mean(dim=1, keepdim=True) + 1e-12)  # (B, nn)
+    rho_pos = torch.nan_to_num(rho_pos, nan=0.0, posinf=1e6, neginf=0.0)
+
+    denom = rho_pos.mean(dim=1, keepdim=True) + 1e-12
+    rho_u = rho_pos / denom
+    rho_u = torch.nan_to_num(rho_u, nan=1.0, posinf=1.0, neginf=0.0)
+
     return rho_u, u_grid
