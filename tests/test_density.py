@@ -30,7 +30,7 @@ def _cfg(grid=64, norm=True, bw=None):
     cfg.grid_size = grid
     cfg.kde_bandwidth = bw
     cfg.normalize_density = norm
-    cfg.calibration_mode = CalibrationMode.SOFTPLUS
+    cfg.calibration_mode = CalibrationMode.CALIBRATED_SOFTPLUS
     return cfg
 
 
