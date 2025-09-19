@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Optional
 
-
 class CalibrationMode(Enum):
     SOFTPLUS = "softplus"
     CALIBRATED_SOFTPLUS = "calibrated_softplus"
@@ -10,11 +9,10 @@ class CalibrationMode(Enum):
 
 @dataclass
 class ReconstructionConfig:
-    degree: int = 0          # or ignore and set output=1
+    degree: int = 0
     input_dim: int = 13
-    hidden_dim: int = 128    # only if you add an MLP
+    hidden_dim: int = 128
     batch_size: int = 32
-
 
     elementwise_affine: bool = True
     calibration_mode: CalibrationMode = CalibrationMode.CALIBRATED_SOFTPLUS
@@ -26,6 +24,11 @@ class ReconstructionConfig:
     epochs: int = 100
 
     kde_bandwidth: Optional[float] = None
-    normalize_density : bool  = True
+    kde_bw_rule: Literal["silverman", "scott", "iqr"] = "silverman"
+    kde_bw_mult: float = 1.0
+
+    normalize_density: bool = True
+
+    nll_space: Literal["raw", "log1p"] = "log1p"
 
     n_of_reconstructions: int = 10

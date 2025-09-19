@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 
-
 def engineer_housing_features(
     df: pd.DataFrame,
     *,
@@ -27,14 +26,21 @@ def engineer_housing_features(
     if current_year is None:
         current_year = datetime.now().year
 
+    df["Year_Built"] = pd.to_numeric(df["Year_Built"], errors="coerce").fillna(0).astype(int)
+
+    den_bed  = df["Num_Bedrooms"].to_numpy(dtype=float)
+    den_bath = df["Num_Bathrooms"].to_numpy(dtype=float)
+    den_bed  = np.where(den_bed  <= 0, eps, den_bed)
+    den_bath = np.where(den_bath <= 0, eps, den_bath)
+
     df["House_Age"]              = current_year - df["Year_Built"]
-    df["Sqft_per_Bedroom"]       = df["Square_Footage"] / (df["Num_Bedrooms"].replace(0, np.nan) + eps)
-    df["Sqft_per_Bathroom"]      = df["Square_Footage"] / (df["Num_Bathrooms"].replace(0, np.nan) + eps)
-    df["Lot_per_Sqft"]           = df["Lot_Size"] / (df["Square_Footage"] + eps)
-    df["Baths_per_Bedroom"]      = df["Num_Bathrooms"] / (df["Num_Bedrooms"].replace(0, np.nan) + eps)
+    df["Sqft_per_Bedroom"]       = df["Square_Footage"] / den_bed
+    df["Sqft_per_Bathroom"]      = df["Square_Footage"] / den_bath
+    df["Lot_per_Sqft"]           = df["Lot_Size"] / (df["Square_Footage"].to_numpy(dtype=float) + eps)
+    df["Baths_per_Bedroom"]      = den_bath / den_bed
     df["Beds_plus_Baths"]        = df["Num_Bedrooms"] + df["Num_Bathrooms"]
     df["Garage_Flag"]            = (df["Garage_Size"] > 0).astype(int)
-    df["Garage_per_Bedroom"]     = df["Garage_Size"] / (df["Num_Bedrooms"].replace(0, np.nan) + eps)
+    df["Garage_per_Bedroom"]     = df["Garage_Size"] / den_bed
 
     df["Bedrooms_x_Bathrooms"]   = df["Num_Bedrooms"] * df["Num_Bathrooms"]
     df["Quality_Sq"]             = df["Neighborhood_Quality"] ** 2

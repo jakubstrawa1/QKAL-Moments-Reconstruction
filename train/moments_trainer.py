@@ -3,11 +3,8 @@ from copy import deepcopy
 from functools import partial
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split, TensorDataset
-from utils.legendre import (
-    legendre_targets_from_y_minmax,
-    fit_y_minmax_from_tensor,
-)
+from torch.utils.data import Dataset, DataLoader, TensorDataset
+from utils.legendre import legendre_targets_from_y
 from models.loss import SimpleCoefficientLoss
 from utils.config import ReconstructionConfig
 from sklearn.preprocessing import QuantileTransformer
@@ -20,7 +17,14 @@ class NumpyDataset(Dataset):
     def __getitem__(self, i): return self.X[i], self.y[i]
 
 
-def make_loaders(X: np.ndarray, y: np.ndarray, batch_size: int = 128, val_ratio: float = 0.2, seed: int = 42):
+def make_loaders(
+    X: np.ndarray,
+    y: np.ndarray,
+    batch_size: int = 128,
+    val_ratio: float = 0.2,
+    seed: int = 42
+):
+
     rng = np.random.default_rng(seed)
     idx = np.arange(len(y)); rng.shuffle(idx)
     split = int((1.0 - val_ratio) * len(y))
@@ -35,6 +39,7 @@ def make_loaders(X: np.ndarray, y: np.ndarray, batch_size: int = 128, val_ratio:
         subsample=10_000,
         random_state=seed,
     )
+    # u in [0,1]
     u_tr = qt.fit_transform(y_tr.reshape(-1, 1)).astype(np.float32).ravel()
     u_va = qt.transform(y_va.reshape(-1, 1)).astype(np.float32).ravel()
 
@@ -42,25 +47,23 @@ def make_loaders(X: np.ndarray, y: np.ndarray, batch_size: int = 128, val_ratio:
     va_ds = TensorDataset(torch.from_numpy(X_va), torch.from_numpy(u_va))
     tr_dl = DataLoader(tr_ds, batch_size=batch_size, shuffle=True)
     va_dl = DataLoader(va_ds, batch_size=batch_size, shuffle=False)
-    return tr_dl, va_dl
+    return tr_dl, va_dl, qt
+
 
 def train_one_model(model, tr_dl, va_dl, cfg: ReconstructionConfig, loss: str = "mse"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
-    y_train_all = torch.cat([b[1] for b in tr_dl], dim=0).to(device)
-    y_min, y_max = fit_y_minmax_from_tensor(y_train_all)
-
-    basis = partial(legendre_targets_from_y_minmax, y_min=y_min, y_max=y_max, gaussianize=True)
+    def basis(u: torch.Tensor, degree: int):
+        return legendre_targets_from_y(u, degree)
     criterion = SimpleCoefficientLoss(cfg, basis_fn=basis)
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
     if loss == "huber":
         base_crit = torch.nn.HuberLoss(reduction="none")
-        def criterion_wrap(preds, y):
+        def compute_loss(preds, y):
             targets = basis(y, cfg.degree).to(device=preds.device, dtype=preds.dtype)
             return base_crit(preds, targets).mean()
-        compute_loss = criterion_wrap
     else:
         def compute_loss(preds, y):
             return criterion(preds, y)
