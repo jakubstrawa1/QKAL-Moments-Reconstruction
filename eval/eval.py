@@ -4,6 +4,8 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.linear_model import LinearRegression
 from models.density import density_from_model
+from utils.legendre import compute_scaled_legendre_polynomials
+import torch.nn.functional as F
 
 EPS = 1e-12
 
@@ -29,58 +31,82 @@ def _inv_on_mean(s_grid: np.ndarray, fs: np.ndarray, space: str) -> np.ndarray:
         raise ValueError
     return Ey
 
+
+# === NLL evaluation ===
 @torch.no_grad()
-def eval_nll(
+def evaluate_nll_legendre(
     model,
-    X: np.ndarray,
-    y: np.ndarray,
-    config,
-    *,
-    batch_size: int = 2048,
-    space: str = "log1p",
-    y_ref_raw: np.ndarray | None = None,
-    qt=None
+    X_te: np.ndarray,
+    y_te: np.ndarray,
+    qt,
+    degree: int,
+    device: str = "cpu",
+    grid_size: int = 512,
+    batch_size: int = 4096,
+    eps: float = 1e-12,
 ) -> float:
-    was_training = model.training
+    """
+    Computes mean NLL on test set:
+      p(y|x) = p(u|x) * du/dy  with  u = qt.transform(y)
+    where p(u|x) is reconstructed from Legendre coefficients predicted by the model.
+
+    Reconstruction:
+      raw(u|x) = sum_k a_k(x) φ_k(u)
+      p(u|x)   = softplus(raw)/Z(x),   Z(x)=∫ softplus(raw(u'|x)) du'  (numerical on [0,1])
+    """
     model.eval()
-    try:
-        device = next(model.parameters()).device
-        y_eval = _transform_y(y, space)
+    device = torch.device(device)
 
-        if y_ref_raw is None:
-            y_ref_raw = y
-        y_ref_t_raw = torch.from_numpy(y_ref_raw.astype(np.float32)).to(device)
+    coeffs_list = []
+    for start in range(0, len(X_te), batch_size):
+        xb = torch.from_numpy(X_te[start:start+batch_size]).to(device=device, dtype=torch.float32)
+        coeffs_list.append(model(xb).detach().cpu())
+    coeffs = torch.cat(coeffs_list, dim=0)              # (N, degree+1)
+    assert coeffs.shape[1] == degree + 1, f"Got {coeffs.shape[1]} coeffs; expected {degree+1}"
 
-        dl = DataLoader(
-            TensorDataset(torch.from_numpy(X.astype(np.float32)),
-                          torch.from_numpy(y_eval.astype(np.float32))),
-            batch_size=batch_size, shuffle=False
-        )
+    u_te = qt.transform(y_te.reshape(-1, 1)).astype(np.float32).ravel()     # (N,)
+    dy = max(1e-4 * np.std(y_te) if np.std(y_te) > 0 else 1e-4, 1e-6)
+    u_plus  = qt.transform((y_te + dy).reshape(-1, 1)).ravel()
+    u_minus = qt.transform((y_te - dy).reshape(-1, 1)).ravel()
+    du_dy = (u_plus - u_minus) / (2.0 * dy)
+    du_dy = np.clip(du_dy, eps, None)                                       # avoid zeros
+    u_te_t = torch.from_numpy(u_te).to(dtype=torch.float32)                 # stays on CPU (small ops)
 
-        nll_sum, n_obs = 0.0, 0
-        for xb, yb in dl:
-            xb = xb.to(device)
-            s_grid_t, f_s_batch_t, *_ = density_from_model(
-                model, xb, y_ref_t_raw, config, qt=qt, space=space
-            )
-            s_grid = s_grid_t.detach().cpu().numpy()
-            fs     = f_s_batch_t.detach().cpu().numpy()
-            if fs.ndim == 1:
-                fs = fs[None, :]
-                y_np = yb.cpu().numpy().reshape(1)
-            else:
-                y_np = yb.cpu().numpy()
-            area = np.trapz(fs, x=s_grid, axis=1)
-            fs = fs / np.clip(area[:, None], EPS, None)
-            for i in range(len(y_np)):
-                fi = np.interp(y_np[i], s_grid, fs[i], left=EPS, right=EPS)
-                nll_sum += -np.log(max(fi, EPS))
-            n_obs += len(y_np)
+    grid = torch.linspace(0.0, 1.0, steps=grid_size, dtype=torch.float32)   # (G,)
+    Phi_grid = compute_scaled_legendre_polynomials(grid.unsqueeze(0), degree).squeeze(0)  # (G, K)
 
-        return nll_sum / max(n_obs, 1)
-    finally:
-        if was_training:
-            model.train()
+    log_py = []
+    G = grid_size
+    dx = 1.0 / (G - 1)
+
+    for start in range(0, len(X_te), batch_size):
+        end = start + batch_size
+        a = coeffs[start:end]                             # (B, K)
+
+        # raw on grid: (B,G) = (B,K) @ (K,G)
+        raw_grid = torch.matmul(a, Phi_grid.T)            # (B, G)
+        pos_grid = F.softplus(raw_grid)                   # positive
+        # trapezoidal normalization
+        Z = (pos_grid[:, 0] + pos_grid[:, -1]) * 0.5 + pos_grid[:, 1:-1].sum(dim=1)
+        Z = Z * dx                                        # (B,)
+        Z = torch.clamp(Z, min=eps)
+
+        # evaluate at the sample's u_i
+        u_batch = u_te_t[start:end]                       # (B,)
+        Phi_u = compute_scaled_legendre_polynomials(u_batch.unsqueeze(1), degree).squeeze(1)  # (B,K)
+        raw_u = (a * Phi_u).sum(dim=1)                    # (B,)
+        pos_u = F.softplus(raw_u)                         # (B,)
+        p_u = pos_u / Z                                   # (B,)
+
+        # Jacobian to y-space
+        p_y = p_u * torch.from_numpy(du_dy[start:end]).to(dtype=torch.float32)  # (B,)
+        p_y = torch.clamp(p_y, min=eps)
+        log_py.append(torch.log(p_y))
+
+    log_py = torch.cat(log_py, dim=0)                     # (N,)
+    nll = -float(log_py.mean().item())
+    return nll
+
 
 @torch.no_grad()
 def predict_mean_from_density(
