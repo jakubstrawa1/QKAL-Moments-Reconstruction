@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from utils.data import engineer_housing_features
 from utils.config import ReconstructionConfig, CalibrationMode
 from train.moments_trainer import make_loaders, train_one_model
-from eval.eval import eval_nll, predict_mean_from_density, rmse, mae
+from eval.eval import evaluate_nll_legendre, predict_mean_from_density, rmse, mae
 from models.density import density_from_model
 from utils.plot import (
     plot_u_space, plot_y_space,
@@ -105,33 +105,31 @@ def evaluate_full(
     *,
     y_ref_raw: np.ndarray,
     qt,
-    nll_space: str = "log1p",
-    do_plots: bool = False,
-    return_nll_vector: bool = True,
+    nll_space: str = "raw",  # kept for API compatibility; not used by evaluate_nll_legendre
+    do_plots: bool = False,  # unused here; kept for signature compatibility
+    return_nll_vector: bool = True,  # ignored: legendre eval doesn't return per-sample NLLs
 ) -> tuple[dict, np.ndarray | None]:
+    """
+    Uses evaluate_nll_legendre for scalar NLL with degree taken from cfg.degree.
+    Returns (metrics_dict, None) since per-sample NLL is not provided.
+    """
     X_te = np.asarray(X_te, dtype=np.float32)
     y_te = np.asarray(y_te, dtype=np.float32)
 
-    nll_per = None
-    if return_nll_vector:
-        try:
-            nll, nll_per = eval_nll(
-                model, X_te, y_te, cfg,
-                space=nll_space, y_ref_raw=y_ref_raw, qt=qt,
-                return_per_sample=True
-            )
-            nll = float(nll)
-        except TypeError:
-            nll = float(eval_nll(
-                model, X_te, y_te, cfg,
-                space=nll_space, y_ref_raw=y_ref_raw, qt=qt
-            ))
-    else:
-        nll = float(eval_nll(
-            model, X_te, y_te, cfg,
-            space=nll_space, y_ref_raw=y_ref_raw, qt=qt
-        ))
+    # Scalar NLL via Legendre-based evaluator
+    nll = float(
+        evaluate_nll_legendre(
+            model,
+            X_te,
+            y_te,
+            qt,
+            degree=cfg.degree,
+            device="cpu",
+        )
+    )
+    nll_per = None  # evaluate_nll_legendre doesn't return per-sample values
 
+    # Predict E[Y|x] in raw space for RMSE/MAE
     yhat = predict_mean_from_density(
         model, X_te, y_te, cfg,
         space="raw", y_ref_raw=y_ref_raw, qt=qt
@@ -145,7 +143,6 @@ def evaluate_full(
         "mean_y": float(y_te.mean()),
         "mean_yhat": float(yhat.mean()),
     }
-
     return out, nll_per
 
 
@@ -186,8 +183,6 @@ def main(argv: list[str] | None = None):
     X = X_df.to_numpy(dtype=np.float32)
     y = y_sr.to_numpy(dtype=np.float32)
 
-    if args.scale_x:
-        X = StandardScaler().fit_transform(X).astype(np.float32)
 
     # split
     rng = np.random.default_rng(args.seed)
@@ -203,7 +198,6 @@ def main(argv: list[str] | None = None):
         X_tv, y_tv, batch_size=args.batch_size, val_ratio=args.val_ratio, seed=args.seed
     )
 
-    # trening
     degrees = [int(d.strip()) for d in args.degrees.split(",") if d.strip()]
     all_results: dict[int, dict[str, dict]] = {}
     best_by_model: dict[str, tuple[int, float]] = {}
@@ -254,8 +248,8 @@ def main(argv: list[str] | None = None):
         plot_best_val_bar(best_by_model)
         plot_val_vs_degree(all_results)
 
-    rows = []
-    per_model_nll_vectors: dict[str, np.ndarray | None] = {}
+    rows=[]
+    per_model_nll_vectors={}
     for name, (model, cfg_used) in best_models.items():
         print(f"\n>>> TEST EVAL: {name.lower()} (best degree={cfg_used.degree}, val={best_by_model[name][1]:.6f})")
         metrics, nll_vec = evaluate_full(
@@ -313,14 +307,14 @@ def run(**kwargs):
 
 if __name__ == "__main__":
      preset = [
-    #     "--csv", "h_prices.csv",
-    #     "--degrees", "3",
-    #     "--epochs", "100",
-    #     "--batch_size", "2048",
-    #     "--nll_space", "log1p",
-    #     "--kde_rule", "iqr",
-    #     "--kde_mult", "1.5",
-    #     "--grid_size", "512",
+        "--csv", "h_prices.csv",
+        "--degrees", "3",
+        "--epochs", "100",
+        "--batch_size", "2048",
+        "--nll_space", "log1p",
+        "--kde_rule", "iqr",
+        "--kde_mult", "1.5",
+        "--grid_size", "512",
          "--plots",
      ]
      main(preset)
